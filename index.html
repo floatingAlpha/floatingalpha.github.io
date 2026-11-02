@@ -22,7 +22,6 @@
 
   .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 16px;
     box-shadow: 0 2px 8px rgba(0,0,0,.08); border-left: 5px solid #2563eb; min-height: 300px; }
-  .card.mastered { border-left-color: #22c55e; }
   .card-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .word { font-size: 34px; font-weight: 800; letter-spacing: .5px; }
   .phone { font-size: 16px; color: #888; font-family: monospace; }
@@ -68,9 +67,7 @@
 <h1>📖 我的生词本</h1>
 
 <div class="toolbar">
-  <button id="filterAll" class="primary">全部</button>
-  <button id="filterUnknown">只看未掌握</button>
-  <label><input type="checkbox" id="autoPlay" checked> 自动发音</label>
+  <label><input type="checkbox" id="autoPlay" checked> 加载时发音一次</label>
   <button id="exportBtn">导出未掌握</button>
   <span class="stats" id="stats"></span>
 </div>
@@ -94,7 +91,6 @@
 <script>
 let words = [];
 let currentIndex = 0;
-let showOnlyUnknown = false;
 
 const $list = document.getElementById('list');
 const $stats = document.getElementById('stats');
@@ -147,8 +143,9 @@ function normalize(raw) {
   };
 }
 
+// 永远只返回未掌握的词
 function getDisplayWords() {
-  return showOnlyUnknown ? words.filter(raw => !mastered.has(normalize(raw).word)) : words;
+  return words.filter(raw => !mastered.has(normalize(raw).word));
 }
 
 function render() {
@@ -160,8 +157,8 @@ function render() {
     return;
   }
   if (display.length === 0) {
-    $list.innerHTML = '<div class="empty">🎉 没有未掌握的单词了</div>';
-    $stats.textContent = '';
+    $list.innerHTML = '<div class="empty">🎉 所有单词都已掌握</div>';
+    $stats.textContent = `未掌握 0 / ${words.length}`;
     return;
   }
 
@@ -170,14 +167,13 @@ function render() {
 
   const raw = display[currentIndex];
   const w = normalize(raw);
-  const isMastered = mastered.has(w.word);
   const phone = w.usphone || w.ukphone || '';
   const sents = w.sentences.slice(0, 2).map(s =>
     `<div class="sentence"><span class="en">${s.en}</span><span class="cn">${s.cn}</span></div>`
   ).join('');
 
   $list.innerHTML = `
-    <div class="card ${isMastered ? 'mastered' : ''}">
+    <div class="card">
       <div class="card-header">
         <span class="word">${w.word}</span>
         ${phone ? `<span class="phone">/${phone}/</span>` : ''}
@@ -186,9 +182,7 @@ function render() {
       <div class="trans">${w.transText}</div>
       ${sents ? `<div class="sentences">${sents}</div>` : ''}
       <div class="actions">
-        <button class="mastered-btn" data-toggle="${w.word}">
-          ${isMastered ? '↩ 取消掌握' : '✅ 标记掌握'}
-        </button>
+        <button class="mastered-btn" data-toggle="${w.word}">✅ 标记掌握</button>
         <button class="nav-btn" id="prevBtn" ${currentIndex === 0 ? 'disabled' : ''}>← 上一个</button>
         <button class="nav-btn" id="nextBtn" ${currentIndex >= display.length - 1 ? 'disabled' : ''}>下一个 →</button>
       </div>
@@ -196,10 +190,11 @@ function render() {
     </div>`;
 
   const total = words.length;
-  const masteredCount = words.filter(r => mastered.has(normalize(r).word)).length;
-  $stats.textContent = `已掌握 ${masteredCount} / ${total}`;
+  const unknownCount = display.length;
+  const masteredCount = total - unknownCount;
+  $stats.textContent = `未掌握 ${unknownCount} / ${total}（已掌握 ${masteredCount}）`;
 
-  if ($autoPlay.checked) speak(w.word);
+  // 注意：这里不再自动发音，自动发音只在加载时播一次
 
   document.querySelector('[data-speak]')?.addEventListener('click', () => speak(w.word));
   document.getElementById('prevBtn')?.addEventListener('click', () => {
@@ -210,17 +205,12 @@ function render() {
   });
   document.querySelector('[data-toggle]')?.addEventListener('click', () => {
     const word = w.word;
-    const wasMastered = mastered.has(word);
-    if (wasMastered) mastered.delete(word); else mastered.add(word);
+    mastered.add(word);
     saveMastered(mastered);
-    if (!wasMastered && showOnlyUnknown) {
-      const newDisplay = getDisplayWords();
-      if (currentIndex >= newDisplay.length) currentIndex = Math.max(0, newDisplay.length - 1);
-      render();
-      showToast('已标记掌握，自动跳到下一个');
-    } else {
-      render();
-    }
+    const newDisplay = getDisplayWords();
+    if (currentIndex >= newDisplay.length) currentIndex = Math.max(0, newDisplay.length - 1);
+    render();
+    showToast('已标记掌握，自动跳到下一个');
   });
 }
 
@@ -242,7 +232,7 @@ document.body.addEventListener('click', function unlock() {
   try { new Audio().play().catch(() => {}); } catch {}
 }, { once: true });
 
-// 自动加载
+// 加载数据，并只在此时播一次发音
 function loadFromData(data, sourceName) {
   if (!Array.isArray(data)) throw new Error('根节点不是数组');
   words = data;
@@ -251,6 +241,11 @@ function loadFromData(data, sourceName) {
   $hint.textContent = `已加载 ${words.length} 个单词（${sourceName}）`;
   $fallback.classList.remove('show');
   render();
+
+  const display = getDisplayWords();
+  if ($autoPlay.checked && display.length > 0) {
+    speak(normalize(display[0]).word);
+  }
 }
 
 fetch('./my_unknown_words.json')
@@ -307,19 +302,6 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   textarea.select();
   try { document.execCommand('copy'); alert(`已复制 ${unknown.length} 个未掌握单词`); }
   catch { alert('已生成，请手动复制'); }
-});
-
-document.getElementById('filterAll').addEventListener('click', () => {
-  showOnlyUnknown = false; currentIndex = 0;
-  document.getElementById('filterAll').classList.add('primary');
-  document.getElementById('filterUnknown').classList.remove('primary');
-  render();
-});
-document.getElementById('filterUnknown').addEventListener('click', () => {
-  showOnlyUnknown = true; currentIndex = 0;
-  document.getElementById('filterUnknown').classList.add('primary');
-  document.getElementById('filterAll').classList.remove('primary');
-  render();
 });
 </script>
 </body>
