@@ -1,12 +1,295 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>我的个人网站</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的生词本 · 单页单词</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: #f5f5f5; color: #333; padding: 16px; max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 20px; margin-bottom: 12px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    margin-bottom: 16px; padding: 12px; background: #fff; border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .toolbar button, .toolbar label, .toolbar input[type=file] {
+    padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px;
+    background: #fff; cursor: pointer; font-size: 14px; }
+  .toolbar button:hover { background: #f0f0f0; }
+  .toolbar button.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .toolbar button.primary:hover { background: #1d4ed8; }
+  .stats { font-size: 14px; color: #666; margin-left: auto; }
+
+  .card { background: #fff; border-radius: 12px; padding: 24px; margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08); border-left: 5px solid #2563eb; min-height: 300px; }
+  .card.mastered { border-left-color: #22c55e; }
+  .card-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .word { font-size: 34px; font-weight: 800; letter-spacing: .5px; }
+  .phone { font-size: 16px; color: #888; font-family: monospace; }
+  .speaker { background: none; border: 1px solid #ddd; border-radius: 50%;
+    width: 42px; height: 42px; cursor: pointer; font-size: 20px;
+    display: flex; align-items: center; justify-content: center; }
+  .speaker:hover { background: #eff6ff; border-color: #2563eb; }
+  .trans { margin-top: 20px; font-size: 19px; line-height: 1.8; color: #333; }
+  .trans .pos { color: #2563eb; font-weight: 700; margin-right: 6px; }
+  .sentences { margin-top: 22px; padding-top: 18px; border-top: 1px dashed #eee; }
+  .sentence { font-size: 16px; line-height: 1.75; margin-bottom: 12px; color: #555; }
+  .sentence .en { color: #222; }
+  .sentence .cn { color: #888; margin-left: 6px; display: block; margin-top: 2px; }
+
+  .actions { margin-top: 24px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .actions button { padding: 10px 22px; border: 1px solid #ddd; border-radius: 8px;
+    background: #fff; cursor: pointer; font-size: 15px; font-weight: 600; }
+  .actions button:hover { background: #f0f0f0; }
+  .actions button.mastered-btn { color: #22c55e; border-color: #22c55e; }
+  .actions button.mastered-btn:hover { background: #f0fdf4; }
+  .actions button.nav-btn { color: #2563eb; border-color: #2563eb; }
+  .actions button.nav-btn:hover { background: #eff6ff; }
+  .actions button:disabled { opacity: .35; cursor: default; }
+
+  .progress { margin-top: 12px; font-size: 14px; color: #666; text-align: center; }
+  .empty { text-align: center; padding: 50px; color: #999; }
+  .hint { font-size: 13px; color: #888; margin-bottom: 12px; }
+  .export-area { margin-top: 20px; }
+  .export-area textarea { width: 100%; height: 200px; padding: 10px;
+    border: 1px solid #ddd; border-radius: 8px; font-family: monospace;
+    font-size: 13px; resize: vertical; }
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #333; color: #fff; padding: 10px 20px; border-radius: 8px;
+    font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; }
+  .toast.show { opacity: .92; }
+</style>
 </head>
 <body>
-    <h1>你好，世界！</h1>
-    <p>欢迎来到我的第一个个人网站。这里是使用 GitHub Pages 搭建的。</p>
+
+<h1>📖 我的生词本</h1>
+
+<div class="toolbar">
+  <input type="file" id="fileInput" accept=".json,application/json">
+  <button id="filterAll" class="primary">全部</button>
+  <button id="filterUnknown">只看未掌握</button>
+  <label><input type="checkbox" id="autoPlay" checked> 自动发音</label>
+  <button id="exportBtn">导出未掌握</button>
+  <span class="stats" id="stats"></span>
+</div>
+
+<div class="hint" id="hint">请先选择你的 my_unknown_words.json 文件（首次点击页面任意位置后，浏览器才允许自动出声）</div>
+
+<div id="list"></div>
+
+<div class="export-area" id="exportArea" style="display:none;">
+  <p style="margin-bottom:8px;font-size:14px;color:#666;">未掌握单词（TSV，一行一个）</p>
+  <textarea id="exportText" readonly></textarea>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let words = [];
+let currentIndex = 0;
+let showOnlyUnknown = false;
+
+const $list = document.getElementById('list');
+const $stats = document.getElementById('stats');
+const $autoPlay = document.getElementById('autoPlay');
+const $hint = document.getElementById('hint');
+const $toast = document.getElementById('toast');
+
+function loadMastered() {
+  try { return new Set(JSON.parse(localStorage.getItem('mastered') || '[]')); }
+  catch { return new Set(); }
+}
+function saveMastered(set) { localStorage.setItem('mastered', JSON.stringify([...set])); }
+let mastered = loadMastered();
+
+function showToast(msg) {
+  $toast.textContent = msg;
+  $toast.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => $toast.classList.remove('show'), 1600);
+}
+
+function speak(word) {
+  if (!word) return;
+  const url = 'https://dict.youdao.com/dictvoice?audio=' + encodeURIComponent(word) + '&type=2';
+  new Audio(url).play().catch(() => {});
+}
+
+function normalize(raw) {
+  const head = raw.headWord || raw.word || '';
+  const c = (raw.content && raw.content.word && raw.content.word.content) || {};
+  const transArr = c.trans || raw.trans || [];
+  const transText = Array.isArray(transArr)
+    ? transArr.map(t => {
+        const pos = t.pos ? `${t.pos}. ` : '';
+        return pos + (t.tranCn || t.tran || '');
+      }).join('；')
+    : String(transArr || '');
+  const sents = (c.sentence && c.sentence.sentences) || raw.sentences || [];
+  const sentences = sents.map(s => ({
+    en: s.sContent || s.en || '',
+    cn: s.sCn || s.cn || ''
+  }));
+  return {
+    word: head,
+    usphone: c.usphone || raw.usphone || raw.phone || '',
+    ukphone: c.ukphone || raw.ukphone || '',
+    transText,
+    sentences
+  };
+}
+
+function getDisplayWords() {
+  return showOnlyUnknown ? words.filter(raw => !mastered.has(normalize(raw).word)) : words;
+}
+
+function render() {
+  const display = getDisplayWords();
+
+  if (words.length === 0) {
+    $list.innerHTML = '<div class="empty">请先加载 JSON 文件</div>';
+    $stats.textContent = '';
+    return;
+  }
+  if (display.length === 0) {
+    $list.innerHTML = '<div class="empty">🎉 没有未掌握的单词了</div>';
+    $stats.textContent = '';
+    return;
+  }
+
+  if (currentIndex >= display.length) currentIndex = display.length - 1;
+  if (currentIndex < 0) currentIndex = 0;
+
+  const raw = display[currentIndex];
+  const w = normalize(raw);
+  const isMastered = mastered.has(w.word);
+  const phone = w.usphone || w.ukphone || '';
+  const sents = w.sentences.slice(0, 2).map(s =>
+    `<div class="sentence"><span class="en">${s.en}</span><span class="cn">${s.cn}</span></div>`
+  ).join('');
+
+  $list.innerHTML = `
+    <div class="card ${isMastered ? 'mastered' : ''}">
+      <div class="card-header">
+        <span class="word">${w.word}</span>
+        ${phone ? `<span class="phone">/${phone}/</span>` : ''}
+        <button class="speaker" data-speak="${w.word}">🔊</button>
+      </div>
+      <div class="trans">${w.transText}</div>
+      ${sents ? `<div class="sentences">${sents}</div>` : ''}
+      <div class="actions">
+        <button class="mastered-btn" data-toggle="${w.word}">
+          ${isMastered ? '↩ 取消掌握' : '✅ 标记掌握'}
+        </button>
+        <button class="nav-btn" id="prevBtn" ${currentIndex === 0 ? 'disabled' : ''}>← 上一个</button>
+        <button class="nav-btn" id="nextBtn" ${currentIndex >= display.length - 1 ? 'disabled' : ''}>下一个 →</button>
+      </div>
+      <div class="progress">${currentIndex + 1} / ${display.length}</div>
+    </div>`;
+
+  const total = words.length;
+  const masteredCount = words.filter(r => mastered.has(normalize(r).word)).length;
+  $stats.textContent = `已掌握 ${masteredCount} / ${total}`;
+
+  // 自动发音
+  if ($autoPlay.checked) speak(w.word);
+
+  document.querySelector('[data-speak]')?.addEventListener('click', () => speak(w.word));
+  document.getElementById('prevBtn')?.addEventListener('click', () => {
+    if (currentIndex > 0) { currentIndex--; render(); }
+  });
+  document.getElementById('nextBtn')?.addEventListener('click', () => {
+    if (currentIndex < display.length - 1) { currentIndex++; render(); }
+  });
+  document.querySelector('[data-toggle]')?.addEventListener('click', () => {
+    const word = w.word;
+    const wasMastered = mastered.has(word);
+    if (wasMastered) mastered.delete(word); else mastered.add(word);
+    saveMastered(mastered);
+    if (!wasMastered && showOnlyUnknown) {
+      // 在“只看未掌握”模式下标记掌握后，当前词会从列表消失，索引保持不动指向下一个
+      const newDisplay = getDisplayWords();
+      if (currentIndex >= newDisplay.length) currentIndex = Math.max(0, newDisplay.length - 1);
+      render();
+      showToast('已标记掌握，自动跳到下一个');
+    } else {
+      render();
+    }
+  });
+}
+
+// 键盘快捷键：← → 切换，空格发音，M 标记掌握
+document.addEventListener('keydown', e => {
+  if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
+  if (words.length === 0) return;
+  const display = getDisplayWords();
+  if (display.length === 0) return;
+  if (e.key === 'ArrowLeft' && currentIndex > 0) { currentIndex--; render(); }
+  else if (e.key === 'ArrowRight' && currentIndex < display.length - 1) { currentIndex++; render(); }
+  else if (e.key === ' ') { e.preventDefault(); speak(normalize(display[currentIndex]).word); }
+  else if (e.key.toLowerCase() === 'm') {
+    document.querySelector('[data-toggle]')?.click();
+  }
+});
+
+// 首次点击页面激活音频权限
+document.body.addEventListener('click', function unlock() {
+  document.body.removeEventListener('click', unlock);
+  try { new Audio().play().catch(() => {}); } catch {}
+}, { once: true });
+
+document.getElementById('fileInput').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      let data = JSON.parse(ev.target.result);
+      if (!Array.isArray(data)) {
+        const lines = ev.target.result.split(/\r?\n/).filter(l => l.trim());
+        data = lines.map(l => JSON.parse(l));
+      }
+      if (!Array.isArray(data)) throw new Error('根节点不是数组');
+      words = data;
+      currentIndex = 0;
+      $hint.textContent = `已加载 ${words.length} 个单词：${file.name}`;
+      render();
+    } catch (err) {
+      $hint.textContent = '解析失败：' + err.message;
+    }
+  };
+  reader.readAsText(file, 'utf-8');
+});
+
+document.getElementById('exportBtn').addEventListener('click', () => {
+  if (!words.length) { alert('请先加载 JSON 文件'); return; }
+  const unknown = words.filter(raw => !mastered.has(normalize(raw).word));
+  const lines = unknown.map(raw => {
+    const w = normalize(raw);
+    const t = w.transText.replace(/\s+/g, ' ').trim();
+    return `${w.word}\t${t}`;
+  });
+  const area = document.getElementById('exportArea');
+  const textarea = document.getElementById('exportText');
+  textarea.value = lines.join('\n');
+  area.style.display = 'block';
+  textarea.select();
+  try { document.execCommand('copy'); alert(`已复制 ${unknown.length} 个未掌握单词`); }
+  catch { alert('已生成，请手动复制'); }
+});
+
+document.getElementById('filterAll').addEventListener('click', () => {
+  showOnlyUnknown = false; currentIndex = 0;
+  document.getElementById('filterAll').classList.add('primary');
+  document.getElementById('filterUnknown').classList.remove('primary');
+  render();
+});
+document.getElementById('filterUnknown').addEventListener('click', () => {
+  showOnlyUnknown = true; currentIndex = 0;
+  document.getElementById('filterUnknown').classList.add('primary');
+  document.getElementById('filterAll').classList.remove('primary');
+  render();
+});
+</script>
 </body>
 </html>
