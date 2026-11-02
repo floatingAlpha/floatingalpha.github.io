@@ -12,7 +12,7 @@
   .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
     margin-bottom: 16px; padding: 12px; background: #fff; border-radius: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,.08); }
-  .toolbar button, .toolbar label, .toolbar input[type=file] {
+  .toolbar button, .toolbar label {
     padding: 6px 12px; border: 1px solid #ddd; border-radius: 6px;
     background: #fff; cursor: pointer; font-size: 14px; }
   .toolbar button:hover { background: #f0f0f0; }
@@ -50,6 +50,7 @@
   .progress { margin-top: 12px; font-size: 14px; color: #666; text-align: center; }
   .empty { text-align: center; padding: 50px; color: #999; }
   .hint { font-size: 13px; color: #888; margin-bottom: 12px; }
+  .hint.error { color: #dc2626; }
   .export-area { margin-top: 20px; }
   .export-area textarea { width: 100%; height: 200px; padding: 10px;
     border: 1px solid #ddd; border-radius: 8px; font-family: monospace;
@@ -58,6 +59,8 @@
     background: #333; color: #fff; padding: 10px 20px; border-radius: 8px;
     font-size: 14px; opacity: 0; transition: opacity .3s; pointer-events: none; }
   .toast.show { opacity: .92; }
+  .fallback { display: none; margin-top: 8px; }
+  .fallback.show { display: block; }
 </style>
 </head>
 <body>
@@ -65,7 +68,6 @@
 <h1>📖 我的生词本</h1>
 
 <div class="toolbar">
-  <input type="file" id="fileInput" accept=".json,application/json">
   <button id="filterAll" class="primary">全部</button>
   <button id="filterUnknown">只看未掌握</button>
   <label><input type="checkbox" id="autoPlay" checked> 自动发音</label>
@@ -73,7 +75,12 @@
   <span class="stats" id="stats"></span>
 </div>
 
-<div class="hint" id="hint">请先选择你的 my_unknown_words.json 文件（首次点击页面任意位置后，浏览器才允许自动出声）</div>
+<div class="hint" id="hint">正在加载 my_unknown_words.json …</div>
+
+<div class="fallback" id="fallback">
+  <p style="font-size:13px;color:#888;margin-bottom:8px;">自动加载失败。如果通过本地双击打开，请改用本地服务器，或在这里手动选择文件：</p>
+  <input type="file" id="fileInput" accept=".json,application/json">
+</div>
 
 <div id="list"></div>
 
@@ -94,6 +101,7 @@ const $stats = document.getElementById('stats');
 const $autoPlay = document.getElementById('autoPlay');
 const $hint = document.getElementById('hint');
 const $toast = document.getElementById('toast');
+const $fallback = document.getElementById('fallback');
 
 function loadMastered() {
   try { return new Set(JSON.parse(localStorage.getItem('mastered') || '[]')); }
@@ -147,7 +155,7 @@ function render() {
   const display = getDisplayWords();
 
   if (words.length === 0) {
-    $list.innerHTML = '<div class="empty">请先加载 JSON 文件</div>';
+    $list.innerHTML = '<div class="empty">还没有加载单词</div>';
     $stats.textContent = '';
     return;
   }
@@ -191,7 +199,6 @@ function render() {
   const masteredCount = words.filter(r => mastered.has(normalize(r).word)).length;
   $stats.textContent = `已掌握 ${masteredCount} / ${total}`;
 
-  // 自动发音
   if ($autoPlay.checked) speak(w.word);
 
   document.querySelector('[data-speak]')?.addEventListener('click', () => speak(w.word));
@@ -207,7 +214,6 @@ function render() {
     if (wasMastered) mastered.delete(word); else mastered.add(word);
     saveMastered(mastered);
     if (!wasMastered && showOnlyUnknown) {
-      // 在“只看未掌握”模式下标记掌握后，当前词会从列表消失，索引保持不动指向下一个
       const newDisplay = getDisplayWords();
       if (currentIndex >= newDisplay.length) currentIndex = Math.max(0, newDisplay.length - 1);
       render();
@@ -218,7 +224,6 @@ function render() {
   });
 }
 
-// 键盘快捷键：← → 切换，空格发音，M 标记掌握
 document.addEventListener('keydown', e => {
   if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
   if (words.length === 0) return;
@@ -232,12 +237,41 @@ document.addEventListener('keydown', e => {
   }
 });
 
-// 首次点击页面激活音频权限
 document.body.addEventListener('click', function unlock() {
   document.body.removeEventListener('click', unlock);
   try { new Audio().play().catch(() => {}); } catch {}
 }, { once: true });
 
+// 自动加载
+function loadFromData(data, sourceName) {
+  if (!Array.isArray(data)) throw new Error('根节点不是数组');
+  words = data;
+  currentIndex = 0;
+  $hint.classList.remove('error');
+  $hint.textContent = `已加载 ${words.length} 个单词（${sourceName}）`;
+  $fallback.classList.remove('show');
+  render();
+}
+
+fetch('./my_unknown_words.json')
+  .then(r => {
+    if (!r.ok) throw new Error('HTTP ' + r.status + '（文件不存在或路径不对）');
+    return r.json();
+  })
+  .then(data => loadFromData(data, 'my_unknown_words.json'))
+  .catch(err => {
+    $hint.classList.add('error');
+    let msg = '自动加载失败：' + err.message;
+    if (location.protocol === 'file:') {
+      msg += '。检测到你是用 file:// 打开页面，浏览器会拦截本地 fetch。请改用本地服务器（如 python -m http.server），或手动选择文件。';
+    } else {
+      msg += '。请确认 my_unknown_words.json 与 HTML 在同一目录。';
+    }
+    $hint.textContent = msg;
+    $fallback.classList.add('show');
+  });
+
+// 手动兜底
 document.getElementById('fileInput').addEventListener('change', e => {
   const file = e.target.files[0];
   if (!file) return;
@@ -249,12 +283,9 @@ document.getElementById('fileInput').addEventListener('change', e => {
         const lines = ev.target.result.split(/\r?\n/).filter(l => l.trim());
         data = lines.map(l => JSON.parse(l));
       }
-      if (!Array.isArray(data)) throw new Error('根节点不是数组');
-      words = data;
-      currentIndex = 0;
-      $hint.textContent = `已加载 ${words.length} 个单词：${file.name}`;
-      render();
+      loadFromData(data, file.name);
     } catch (err) {
+      $hint.classList.add('error');
       $hint.textContent = '解析失败：' + err.message;
     }
   };
